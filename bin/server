@@ -1,0 +1,113 @@
+#!/bin/bash
+
+name="schema-registry"
+home_dir=$(dirname $0)/..
+bin_dir=$home_dir/bin
+conf_dir=$home_dir/conf
+log_dir=$home_dir/logs
+lib_dir=$home_dir/share
+
+jmx_port=9985
+jmx_rmi_port=9985
+
+LOG4J_CONFIG_FILE="$conf_dir/$name-log4j.properties"
+PROPERTIES_FILE="$conf_dir/$name.properties"
+
+LOG4J_OPTS="-Dlog4j.configuration=file:${LOG4J_CONFIG_FILE}"
+HEAP_OPTS=
+
+EXTRA_ARGS=${EXTRA_ARGS-'-name $name -loggc'}
+
+COMMAND=$1
+
+# Which java to use
+if [[ -z "$JAVA_HOME" ]]; then
+	JAVA="java"
+else
+	JAVA="$JAVA_HOME/bin/java"
+fi
+
+# jvm
+JVM_PERFORMANCE_OPTS="-server -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+DisableExplicitGC -Djava.awt.headless=true"
+JMX_OPTS="-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false"
+if [ $jmx_port ]; then
+	JMX_OPTS="$JMX_OPTS -Dcom.sun.management.jmxremote.port=$jmx_port"
+fi
+if [ $jmx_rmi_port ]; then
+	JMX_OPTS="$JMX_OPTS -Dcom.sun.management.jmxremote.rmi.port=$jmx_rmi_port"
+fi
+JMX_OPTS="$JMX_OPTS -Djava.rmi.server.hostname=$host_ip"
+
+# log
+LOG_OPTS="-Dschema-registry.log.dir=$log_dir"
+
+# class path
+CLASS_PATH="-cp "
+for dir in "$lib_dir"/*;
+do
+	CLASS_PATH="$CLASS_PATH:$dir/*"
+done
+
+# main class
+MAIN_CLASS="io.confluent.kafka.schemaregistry.rest.SchemaRegistryMain"
+
+function usage() {
+	echo "USAGE: $0 (start|stop|check)"
+}
+
+PID=0
+function getPID() {
+	local pid=$(ps ax | grep java | grep -i $MAIN_CLASS | grep -v grep | awk '{print $1}')
+	if [[ -z $pid ]]; then
+		pid=0
+	fi
+	PID=$pid
+}
+
+function check() {
+	local name=$1
+	local class=$2
+
+	getPID $class
+
+	if [[ $PID > 0 ]]; then
+		echo "$name - running ($PID)"
+	else
+		echo "$name - not running"
+	fi
+}
+
+function start() {
+	getPID $MAIN_CLASS
+
+	if [[ $PID == 0 ]]; then
+		echo "$JAVA $HEAP_OPTS $JVM_PERFORMANCE_OPTS $JMX_OPTS $LOG_OPTS $LOG4J_OPTS $CLASS_PATH $MAIN_CLASS $PROPERTIES_FILE"
+		exec $JAVA $HEAP_OPTS $JVM_PERFORMANCE_OPTS $JMX_OPTS $LOG_OPTS $LOG4J_OPTS $CLASS_PATH $MAIN_CLASS $PROPERTIES_FILE 2>&1
+	else
+		echo "broker server has already started"
+		exit 1
+	fi
+}
+
+
+function stop() {
+	getPID $MAIN_CLASS
+
+	if [[ $PID == 0 ]]; then
+		echo "No $name server to stop"
+		exit 1
+	else
+		kill -s TERM $PID
+	fi
+}
+
+if [[ "x$COMMAND" = "xstart" ]]; then
+	start	
+elif [[ "x$COMMAND" = "xstop" ]]; then
+	stop
+elif [[ "x$COMMAND" = "xcheck" ]]; then
+	check "$name" $MAIN_CLASS
+else
+	usage
+fi
+
